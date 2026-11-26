@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { prototypes } from './prototypes'
 
-const current = () => location.hash.replace('#/', '')
+const current = () => location.hash.replace('#/', '') || 'spin' // the site opens straight into Spin; the list of prototypes lives at #/lab
 
 export default function App() {
   const [slug, setSlug] = useState(current())

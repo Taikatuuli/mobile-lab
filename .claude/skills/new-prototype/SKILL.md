@@ -6,7 +6,7 @@ description: Scaffold a new mobile prototype in this repo and register it. Use w
 # New prototype
 
 1. Pick a short kebab-case slug from the request (e.g. `onboarding`, `tip-sheet`).
-2. Create `src/prototypes/<slug>/<PascalName>.tsx` with a default-exported component. Copy the patterns in `src/prototypes/invoices/Invoices.tsx`: Framer Motion for gestures and sheets, CSS variables (`--bg`, `--fg`, `--muted`, `--line`, `--accent`) for color so dark mode works.
+2. Create `src/prototypes/<slug>/<PascalName>.tsx` with a default-exported component. Copy the patterns in `src/prototypes/hello/Hello.tsx` (a Framer Motion sheet) or `src/prototypes/spin/Spin.tsx` (canvas drawing, Web Audio, touch gestures): Framer Motion for gestures and sheets, CSS variables (`--bg`, `--fg`, `--muted`, `--line`, `--accent`) for color so dark mode works.
 3. Register it in `src/prototypes/index.ts` (`slug`, `title`, `component`).
 4. Use realistic fake data, never lorem ipsum. Keep state local; no backend.
 5. Run `npx tsc -b` and `npm run build`. Fix errors before reporting done.
