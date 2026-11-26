@@ -41,12 +41,13 @@ const stepPops = (r: Ring, dt: number) => {
 const RINGS_KEY = 'spin-rings'
 const readRings = (): Voice[] => { // the instruments that were on last time
   try {
-    const j = JSON.parse(localStorage.getItem(RINGS_KEY) || '[]')
-    const v = VOICES.filter((x) => Array.isArray(j) && j.includes(x))
-    return v.length ? v : ['bowl']
+    const raw = localStorage.getItem(RINGS_KEY)
+    if (raw === null) return ['bowl'] // the first visit starts with the Bowl
+    const j = JSON.parse(raw)
+    return Array.isArray(j) ? VOICES.filter((x) => j.includes(x)) : ['bowl'] // an empty list is allowed: you can take every instrument away
   } catch { return ['bowl'] }
 }
-type SpinState = { rings: Ring[]; th: Theme; fbT: number; muted: boolean; cyFrac: number; cx: number; W: number; H: number }
+type SpinState = { rings: Ring[]; th: Theme; fbT: number; muted: boolean; cyFrac: number; cx: number; dustR: number; dustSpin: number; W: number; H: number }
 // the loop: you record how you spin the rings, and then the rings spin themselves that way, over and over
 type LoopFrame = { t: number; rots: Partial<Record<Voice, number>> }
 type LoopMode = 'idle' | 'rec' | 'ready' | 'play' // ready: a sample is kept and stopped; play: it is playing back
@@ -263,6 +264,7 @@ export default function Spin() {
   const wasReviewing = useRef(false)
   const [muted, setMuted] = useState(false)
   const lastPick = useRef<Ring | null>(null) // the ring you last grabbed: it keeps the grab when the gaps are tight
+  const arrowRef = useRef<HTMLDivElement>(null)
   const ringTL = useRef<SVGCircleElement>(null) // the timer ring on the record button and the one on the play/pause button are drawn straight onto the SVG, so a ticking clock never re-renders the whole screen
   const ringMenu = useRef<SVGCircleElement>(null)
   const progRef = useRef(0) // how far through the recording (or the sample) we are, 0 to 1
@@ -284,6 +286,13 @@ export default function Spin() {
   const [instOpen, setInstOpen] = useState(true)
   const [layersOpen, setLayersOpen] = useState(true)
   const [lookOpen, setLookOpen] = useState(false)
+  const [emptyHint, setEmptyHint] = useState(false) // the 'tap an instrument' hint waits a couple of seconds after the last one goes, so it only shows if you pause
+  useEffect(() => {
+    if (active.length > 0) { setEmptyHint(false); return }
+    const t = window.setTimeout(() => setEmptyHint(true), 2200)
+    return () => clearTimeout(t)
+  }, [active.length])
+  useEffect(() => { if (active.length === 0) setInstOpen(true) }, [active.length]) // with every instrument gone, the row to pick one from is always showing
   const theme: Theme = bw ? { ...THEMES[themeId], accents: BW_ACCENTS[themeId] } : THEMES[themeId]
   const iconOn = themeId === 'chalk' && !bw ? '#ffffff' : theme.bg // one icon colour for every coloured button in a theme, so they match: white on the light theme's deeper colours, the dark shell on the dark theme's bright ones (all at least 4:1)
   const reduceRef = useRef(false) // prefers-reduced-motion
@@ -310,7 +319,7 @@ export default function Spin() {
   const stackTop = sndH ? sndBottom + sndH : lookOpen ? 52 : 0
   reserveRef.current = reviewing ? 134 : stackTop === 0 ? 80 : stackTop + (lookOpen && sndH ? 22 : 50) // the open panels plus the 'Flick to spin' line above them
   const sRef = useRef<SpinState | null>(null)
-  if (!sRef.current) sRef.current = { rings: [...active].sort((x, y) => RING_ORDER.indexOf(x) - RING_ORDER.indexOf(y)).map((v) => ({ ...newRing(v, 0.15), alpha: 1 })), th: THEMES.mono as Theme, fbT: -1, muted: false, cyFrac: 0.44, cx: 0, W: 0, H: 0 }
+  if (!sRef.current) sRef.current = { rings: [...active].sort((x, y) => RING_ORDER.indexOf(x) - RING_ORDER.indexOf(y)).map((v) => ({ ...newRing(v, 0.15), alpha: 1 })), th: THEMES.mono as Theme, fbT: -1, muted: false, cyFrac: 0.44, cx: 0, dustR: 0, dustSpin: 0, W: 0, H: 0 }
   const s = sRef as { current: SpinState }
 
   s.current.th = theme // the canvas reads the look from here
@@ -608,6 +617,7 @@ export default function Spin() {
       st.cyFrac += (cyTarget - st.cyFrac) * Math.min(1, dt * 9)
       const cx = lnd ? (W - LAND_PANEL) / 2 : W / 2, cy = H * st.cyFrac
       st.cx = cx
+      if (arrowRef.current) arrowRef.current.style.transform = `translate(${cx.toFixed(1)}px, ${cy.toFixed(1)}px) translate(-50%, -50%)` // the spin cue sits at the centre of the rings
       const room = Math.max(Math.min((bottom - top) / 2 - 16, lnd ? cx - 16 : Infinity), 40) // the biggest ring that clears both
       const base = Math.min(Math.min(W, H) * 0.25, room)
       st.rings = st.rings.filter((r) => !(r.leaving && r.alpha < 0.01)) // a ring that has finished fading out is gone
@@ -677,16 +687,17 @@ export default function Spin() {
         if (Math.abs(fbT - st.fbT) > 0.004) { st.fbT = fbT; an.fb.gain.setTargetAtTime(fbT, an.ctx.currentTime, 0.2) }
       }
 
+      // slow dust rings around the biggest ring, counter-rotating. With no instruments they stay, drifting round the size a single ring would be, so the screen is never bare
       const outer = shown[0]
-      if (outer) { // slow dust rings around the biggest ring, counter-rotating
-        for (let k = 1; k <= 3; k++) {
-          const rk = outer.R * bf * (1 + 0.42 * k), n = 14 + k * 8
-          const rot = outer.rot * (k % 2 ? -0.35 : 0.2) / k
-          ctx.fillStyle = th.dust[k - 1]
-          for (let i = 0; i < n; i++) {
-            const ang = rot + (i / n) * Math.PI * 2
-            ctx.beginPath(); ctx.arc(cx + Math.cos(ang) * rk, cy + Math.sin(ang) * rk, 1.7, 0, Math.PI * 2); ctx.fill()
-          }
+      st.dustR = st.dustR ? st.dustR + ((outer ? outer.R : base) - st.dustR) * Math.min(1, dt * 6) : (outer ? outer.R : base)
+      st.dustSpin = outer ? outer.rot : st.dustSpin + 0.12 * dt
+      for (let k = 1; k <= 3; k++) {
+        const rk = st.dustR * bf * (1 + 0.42 * k), n = 14 + k * 8
+        const rot = st.dustSpin * (k % 2 ? -0.35 : 0.2) / k
+        ctx.fillStyle = th.dust[k - 1]
+        for (let i = 0; i < n; i++) {
+          const ang = rot + (i / n) * Math.PI * 2
+          ctx.beginPath(); ctx.arc(cx + Math.cos(ang) * rk, cy + Math.sin(ang) * rk, 1.7, 0, Math.PI * 2); ctx.fill()
         }
       }
 
@@ -840,7 +851,6 @@ export default function Spin() {
   const toggleVoice = (v: Voice) => {
     ensureAudio(); setTouched(true)
     const on = active.includes(v)
-    if (on && active.length === 1) { say('Keep one instrument'); return }
     const next = VOICES.filter((x) => (x === v ? !on : active.includes(x)))
     setActive(next)
     try { localStorage.setItem(RINGS_KEY, JSON.stringify(next)) } catch { /* private mode */ }
@@ -988,9 +998,10 @@ export default function Spin() {
       <div className="sp-vh" role="status" aria-live="polite">{caption ?? (loopMode === 'rec' ? 'Recording. Tap the red record button to finish.' : null)}</div>
       {TUNING && <TunePanel />}
 
-      <div style={{ position: 'absolute', left: 0, right: land ? LAND_PANEL : 0, bottom: `calc(var(--safe-bottom) + ${land ? 16 : hintBottom}px)`, textAlign: 'center',
-        color: 'var(--ink)', pointerEvents: 'none', opacity: touched ? 0 : 1, transition: 'opacity .3s ease-out' }}>
-        <div style={{ fontSize: 22, fontWeight: 200, letterSpacing: 1 }}>Flick to spin</div>
+      {/* the cue: a few quiet words in the middle of the rings (the frame loop keeps them centred). "Spin to play" until you touch anything; with no instruments, "Tap an instrument…" after a pause */}
+      <div ref={arrowRef} style={{ position: 'absolute', left: 0, top: 0, width: 'max-content', maxWidth: 230, textAlign: 'center', textWrap: 'balance', color: 'var(--ink)', pointerEvents: 'none', fontSize: 13, fontWeight: 300, letterSpacing: 2, lineHeight: 1.5, textTransform: 'uppercase',
+        opacity: active.length === 0 ? (emptyHint ? 0.55 : 0) : (touched ? 0 : 0.55), transition: 'opacity .6s ease-out' }}>
+        {active.length === 0 ? 'Tap an instrument to start playing' : 'Spin to play'}
       </div>
       {undoable && !reviewing && <button type="button" className="sp-undo" onPointerDown={stop} onClick={loopUndo} style={{ position: 'absolute', left: land ? `calc((100% - ${LAND_PANEL}px) / 2)` : '50%', transform: 'translateX(-50%)', bottom: `calc(var(--safe-bottom) + ${land ? 56 : hintBottom + 36}px)`, zIndex: 2 }}>Undo discard</button>}
       {/* the sample: top left. Record, and once there is a recording, a button that brings back its play, pause and discard choices */}
